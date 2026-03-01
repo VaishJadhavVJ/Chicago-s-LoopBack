@@ -1,3 +1,5 @@
+from contextlib import asynccontextmanager
+
 from fastapi import FastAPI, Depends, HTTPException
 from sqlalchemy.orm import Session
 
@@ -10,31 +12,43 @@ from loopback.schemas import (
 )
 from loopback.services import create_report_and_update_task, recommend_routes
 
+
 def seed_departments(db: Session) -> None:
-    # Insert if not exists
-    existing = {d.dept_id for d in db.query(Department).all()}
+    """
+    Insert core departments if missing.
+    Safe to run on every startup.
+    """
     seeds = [
         ("CTA_OPS", "CTA Operations", None),
         ("CITY_311", "City Services / 311", None),
         ("SECURITY", "Campus/Community Security", None),
         ("COMMUNITY", "Community Review", None),
     ]
+
+    existing = {d.dept_id for d in db.query(Department.dept_id).all()}
     for dept_id, dept_name, desc in seeds:
         if dept_id not in existing:
             db.add(Department(dept_id=dept_id, dept_name=dept_name, description=desc))
     db.commit()
 
-def create_app() -> FastAPI:
-    app = FastAPI(title="LoopBack API", version="0.1.0")
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Create tables (hackathon-friendly). In production you'd use migrations.
     Base.metadata.create_all(bind=engine)
 
-    @app.on_event("startup")
-    def _startup():
-        db = next(get_db())
-        try:
-            seed_departments(db)
-        finally:
-            db.close()
+    # Seed departments
+    db = next(get_db())
+    try:
+        seed_departments(db)
+    finally:
+        db.close()
+
+    yield
+
+
+def create_app() -> FastAPI:
+    app = FastAPI(title="LoopBack API", version="0.1.0", lifespan=lifespan)
 
     @app.get("/health")
     def health():
@@ -122,5 +136,6 @@ def create_app() -> FastAPI:
             raise HTTPException(status_code=400, detail=str(e))
 
     return app
+
 
 app = create_app()

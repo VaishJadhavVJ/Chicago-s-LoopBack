@@ -1,7 +1,9 @@
 import json
+import re
 from dataclasses import dataclass
 from typing import Optional, Literal, Any, Dict
-from openai import OpenAI
+
+import requests
 
 from loopback.config import settings
 
@@ -51,6 +53,72 @@ def _clamp_llm_severity(base: int, llm: int) -> int:
         return base - settings.MAX_LLM_SEVERITY_ADJUST
     return llm
 
+def _extract_json(text: str) -> dict:
+    """
+    Gemini usually returns clean JSON if instructed, but sometimes wraps it.
+    This tries:
+      1) direct json.loads
+      2) extract first {...} block
+    """
+    text = text.strip()
+
+    # Attempt direct parse
+    try:
+        return json.loads(text)
+    except Exception:
+        pass
+
+    # Extract first JSON object block
+    match = re.search(r"\{.*\}", text, flags=re.DOTALL)
+    if match:
+        candidate = match.group(0)
+        return json.loads(candidate)
+
+    raise ValueError("LLM output was not valid JSON")
+
+def _gemini_generate_text(system_prompt: str, user_text: str) -> str:
+    """
+    Calls Gemini generateContent and returns plain text output.
+    """
+    if not settings.GEMINI_API_KEY:
+        raise ValueError("Missing GEMINI_API_KEY")
+
+    model = getattr(settings, "GEMINI_MODEL", None) or "gemini-2.5-flash"
+
+    # Gemini REST endpoint
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
+    params = {"key": settings.GEMINI_API_KEY}
+
+    # Use a single text part that includes system + user for simplicity & compatibility
+    # (Some versions support 'systemInstruction', but this works reliably.)
+    combined = f"SYSTEM:\n{system_prompt}\n\nUSER:\n{user_text}"
+
+    body = {
+        "contents": [
+            {"role": "user", "parts": [{"text": combined}]}
+        ],
+        "generationConfig": {
+            "temperature": 0.2,
+            "maxOutputTokens": 600,
+        },
+    }
+
+    resp = requests.post(url, params=params, json=body, timeout=25)
+    if resp.status_code != 200:
+        raise ValueError(f"Gemini API error {resp.status_code}: {resp.text[:400]}")
+
+    data = resp.json()
+    candidates = data.get("candidates") or []
+    if not candidates:
+        raise ValueError("Gemini returned no candidates")
+
+    content = candidates[0].get("content") or {}
+    parts = content.get("parts") or []
+    if not parts or "text" not in parts[0]:
+        raise ValueError("Gemini response missing text content")
+
+    return parts[0]["text"]
+
 def triage_with_llm(
     *,
     category: str,
@@ -62,10 +130,9 @@ def triage_with_llm(
     proposed_department: str,
     sample_reports: list[str],
 ) -> Optional[LLMTriageResult]:
-    if not settings.OPENAI_API_KEY:
+    # If no Gemini key, fallback to None (your service.py already handles fallback)
+    if not getattr(settings, "GEMINI_API_KEY", ""):
         return None
-
-    client = OpenAI(api_key=settings.OPENAI_API_KEY)
 
     payload = {
         "category": category,
@@ -80,17 +147,11 @@ def triage_with_llm(
         "sample_reports": sample_reports[:5],
     }
 
-    resp = client.responses.create(
-        model=settings.OPENAI_MODEL,
-        input=[
-            {"role": "system", "content": _PROMPT},
-            {"role": "user", "content": json.dumps(payload, ensure_ascii=False)},
-        ],
-    )
+    # Call Gemini
+    text = _gemini_generate_text(_PROMPT, json.dumps(payload, ensure_ascii=False))
 
-    # Best-effort parse
-    text = resp.output_text
-    data = json.loads(text)
+    # Parse JSON
+    data = _extract_json(text)
 
     llm_sev = int(data.get("final_severity_1to5", base_severity_1to5))
     final_sev = _clamp_llm_severity(base_severity_1to5, llm_sev)
