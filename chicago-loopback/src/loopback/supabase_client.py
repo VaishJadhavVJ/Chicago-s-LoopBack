@@ -10,6 +10,6 @@ tables = ["users", "departments", "tasks", "reports"]
 for table in tables:
     try:
         res = supabase.table(table).select("*").limit(1).execute()
-        print(f"✅ {table} — connected")
+        print(f" {table} — connected")
     except Exception as e:
-        print(f"❌ {table} — failed: {e}")
+        print(f" {table} — failed: {e}")
