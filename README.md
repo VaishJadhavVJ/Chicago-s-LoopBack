@@ -127,9 +127,9 @@ MAPBOX_TOKEN=pk-...                       # For route recommendations
 
 Built by 6 Masters CS students at DePaul University:
 
-- **Frontend** — Rohan Singh, Meghana Rabba
-- **Backend** — Vikas Ravikumar Karjigi, Sanath Manjunath
-- **Database** — Vaishnavi Jadhav, Sriniwas
+- **Frontend** — Rohan Singh, Sanath Manjunath 
+- **Backend** — Vikas Ravikumar Karjigi, Meghana Rabba
+- **Database** — Vaishnavi Jadhav, Tilak
 
 ## Hackathon Result
 
